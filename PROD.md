@@ -32,7 +32,7 @@ dist/
 .env
 .env.*
 !.env.example
-uploads/
+apps/api/uploads/
 *.log
 .DS_Store
 .next/
@@ -42,9 +42,14 @@ uploads/
 
 **`apps/api/.env.example`:**
 ```env
-DATABASE_URL=postgresql://user:password@postgres:5432/trendastana
-PORT=3001
-NODE_ENV=production
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=postgres
+DB_NAME=trendastana
+DB_SYNC=true
+PORT=4000
+NODE_ENV=development
 ```
 
 **`apps/web/.env.example`:**
@@ -160,7 +165,7 @@ chown deploy:deploy /opt/trendastana
 Создать следующие файлы в репозитории:
 
 > **Проверить перед деплоем:** в `apps/api/src/main.ts` порт должен читаться из env:  
-> `app.listen(process.env.PORT ?? 3001)`  
+> `const port = Number(process.env.PORT || 4000); await app.listen(port)`  
 > Если там стоит хардкод — заменить.
 
 ### `apps/api/Dockerfile`
@@ -179,6 +184,8 @@ ENV NODE_ENV=production
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/scripts ./scripts
+COPY --from=builder /app/migrations ./migrations
 EXPOSE 3001
 CMD ["node", "dist/main.js"]
 ```
@@ -244,7 +251,12 @@ services:
     container_name: trendastana_api
     restart: always
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB}
+      DB_SYNC: "true" # first deploy: true, after successful import switch to false
       PORT: 3001
       NODE_ENV: production
     depends_on:
@@ -309,6 +321,8 @@ networks:
 ---
 
 ## 6. Nginx конфиг
+
+> Важно: использовать только один nginx на портах `80/443` — либо системный (`systemctl`), либо docker-сервис `nginx` из `docker compose`.
 
 ### `nginx/nginx.conf`
 
@@ -454,12 +468,24 @@ docker compose logs -f web
 ### 8.5 Запустить миграции БД
 
 ```bash
-docker compose exec api npm run migration:import:full
+docker compose run --rm \
+  -v /opt/trendastana/apps/api/scripts:/app/scripts:ro \
+  -v /opt/trendastana/apps/api/migrations:/app/migrations:ro \
+  -v /opt/trendastana/apps/web/public:/apps/web/public:ro \
+  api npm run migration:import:full
+```
+
+После первого успешного импорта переключить `DB_SYNC` в `docker-compose.yml` на `"false"` и пересоздать `api`:
+
+```bash
+docker compose up -d --build api
 ```
 
 ---
 
 ## 9. GitHub Actions — автодеплой
+
+> На текущий момент автодеплой заработает только после добавления файла `.github/workflows/deploy.yml` в репозиторий и настройки Secrets.
 
 ### 9.1 Создать SSH Deploy Key
 
@@ -517,7 +543,11 @@ jobs:
             cd /opt/trendastana
             git pull origin main
             docker compose up -d --build --remove-orphans
-            docker compose exec -T api npm run migration:import:full || true
+            docker compose run --rm \
+              -v /opt/trendastana/apps/api/scripts:/app/scripts:ro \
+              -v /opt/trendastana/apps/api/migrations:/app/migrations:ro \
+              -v /opt/trendastana/apps/web/public:/apps/web/public:ro \
+              api npm run migration:import:full || true
             docker image prune -f
             echo "Deploy done: $(date)"
 ```
