@@ -14,7 +14,9 @@ ENV PORT=3000
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/.next/static ./apps/web/.next/static
+COPY --from=builder /app/.next/static ./app/.next/static
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/public ./apps/web/public
+COPY --from=builder /app/public ./app/public
 EXPOSE 3000
-CMD ["sh", "-c", "if [ -f /app/server.js ]; then node /app/server.js; elif [ -f /app/apps/web/server.js ]; then node /app/apps/web/server.js; else echo 'server.js not found in standalone output'; find /app -maxdepth 4 -name server.js -print; exit 1; fi"]
+CMD ["sh", "-c", "for entry in /app/server.js /app/app/server.js /app/apps/web/server.js; do if [ -f \"$entry\" ]; then exec node \"$entry\"; fi; done; echo 'server.js not found in standalone output'; find /app -maxdepth 6 -name server.js -print; exit 1"]
